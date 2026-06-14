@@ -1,0 +1,14 @@
+{
+  "name": "finauto-saas",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Dev launcher for the FinAuto SaaS stack (FastAPI api + Vite web).",
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,green \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "cd api && .venv\\Scripts\\python.exe -m uvicorn finauto_api.main:app --reload --port 8000",
+    "dev:web": "cd web && npm run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0"
+  }
+}
