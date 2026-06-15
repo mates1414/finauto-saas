@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Upload, Download, Plus, X, AlertTriangle, CheckCircle, FileText, Play } from "lucide-react";
+import { Upload, Download, Plus, X, AlertTriangle, CheckCircle, FileText, Play, Database, ArrowRight } from "lucide-react";
 import { FootballFieldChart } from "./FootballFieldChart";
 
 // Base API configuration (override with VITE_API_BASE at build/dev time)
@@ -27,12 +27,80 @@ export const Step1Upload: React.FC<StepProps> = ({ token, ticker, setTicker, nex
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const advancedRef = useRef(false);
 
+  // "Use previous data": years already cached in the (shared) DB for this ticker.
+  const [cachedYears, setCachedYears] = useState<{ year: number; source?: string }[]>([]);
+  const [selectedYears, setSelectedYears] = useState<number[]>([]);
+  const [reusing, setReusing] = useState(false);
+
   // Stop polling if the component unmounts mid-flight.
   useEffect(() => {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, []);
+
+  // When a ticker is entered, look up cached financials so we can offer reuse
+  // instead of a fresh (slow, paid) LLM extraction. Debounced to avoid a request
+  // on every keystroke.
+  useEffect(() => {
+    const t = ticker.trim().toUpperCase();
+    if (!t) {
+      setCachedYears([]);
+      setSelectedYears([]);
+      return;
+    }
+    const handle = setTimeout(async () => {
+      try {
+        const resp = await fetch(`${API_BASE}/api/financials/${encodeURIComponent(t)}/available`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const years = (data.years || []) as { year: number; source?: string }[];
+        setCachedYears(years);
+        setSelectedYears(years.map((y) => y.year)); // default: all selected
+      } catch {
+        // Best-effort: a lookup failure just hides the reuse panel.
+        setCachedYears([]);
+      }
+    }, 400);
+    return () => clearTimeout(handle);
+  }, [ticker, token]);
+
+  const toggleYear = (year: number) => {
+    setSelectedYears((prev) =>
+      prev.includes(year) ? prev.filter((y) => y !== year) : [...prev, year]
+    );
+  };
+
+  const usePreviousData = async () => {
+    if (selectedYears.length === 0) {
+      setError("Select at least one year to reuse.");
+      return;
+    }
+    setError("");
+    setReusing(true);
+    try {
+      const resp = await fetch(`${API_BASE}/api/financials/${encodeURIComponent(ticker.toUpperCase())}/select`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ years: selectedYears }),
+      });
+      if (!resp.ok) {
+        const errData = await resp.json();
+        throw new Error(errData.detail || "Failed to reuse previous data.");
+      }
+      // Financials are now in this user's snapshot — skip extraction entirely.
+      nextStep();
+    } catch (err: any) {
+      setError(err.message || "Could not reuse previous data.");
+    } finally {
+      setReusing(false);
+    }
+  };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -167,6 +235,58 @@ export const Step1Upload: React.FC<StepProps> = ({ token, ticker, setTicker, nex
           style={{ maxWidth: "240px" }}
         />
       </div>
+
+      {cachedYears.length > 0 && !loading && (
+        <div className="mb-6 p-5 rounded-xl bg-emerald-950/15 border border-emerald-800/40">
+          <div className="flex items-center gap-2 text-emerald-400 font-semibold text-sm mb-1">
+            <Database size={16} />
+            Use previous data
+          </div>
+          <p className="text-xs text-gray-400 mb-3">
+            Found cached financials for {ticker.toUpperCase()} ({cachedYears.length}{" "}
+            {cachedYears.length === 1 ? "year" : "years"}). Pick which years to use and skip
+            re-extraction.
+          </p>
+          <div className="flex flex-wrap gap-2 mb-4">
+            {cachedYears.map(({ year }) => {
+              const checked = selectedYears.includes(year);
+              return (
+                <button
+                  key={year}
+                  type="button"
+                  onClick={() => toggleYear(year)}
+                  className={`px-3 py-1.5 rounded-lg font-mono text-sm border transition-all ${
+                    checked
+                      ? "bg-emerald-500/20 border-emerald-500/50 text-emerald-300"
+                      : "bg-white/5 border-white/10 text-gray-400 hover:border-emerald-500/40"
+                  }`}
+                >
+                  {checked ? "✓ " : ""}
+                  {year}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            onClick={usePreviousData}
+            disabled={reusing || selectedYears.length === 0}
+            className="btn-primary flex items-center gap-2"
+          >
+            {reusing ? (
+              <>
+                <div className="spinner" style={{ width: "16px", height: "16px" }} />
+                Loading...
+              </>
+            ) : (
+              <>
+                Use selected years
+                <ArrowRight size={16} />
+              </>
+            )}
+          </button>
+          <p className="text-xs text-gray-500 mt-3">Or upload new PDFs below to refresh the data.</p>
+        </div>
+      )}
 
       <div
         onDragOver={handleDragOver}

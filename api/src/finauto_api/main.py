@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .deps import engine
 from .models import Base
-from .routers import auth, extract, peers, workbook, report
+from .routers import auth, extract, financials, peers, workbook, report
 
 # Create database tables automatically
 Base.metadata.create_all(bind=engine)
@@ -12,7 +12,7 @@ app = FastAPI(
     title=settings.app_name,
     description="Backend API service for FinAuto SaaS",
     version="0.1.0",
-    debug=settings.debug
+    debug=settings.debug,
 )
 
 # CORS configurations.
@@ -30,10 +30,14 @@ app.add_middleware(
 # Include routers
 app.include_router(auth.router)
 app.include_router(extract.router)
+app.include_router(financials.router)
 app.include_router(peers.router)
 app.include_router(workbook.router)
 app.include_router(report.router)
 
+
 @app.get("/")
 def read_root():
-    return {"message": "Welcome to the FinAuto SaaS API. Go to /docs for API documentation."}
+    return {
+        "message": "Welcome to the FinAuto SaaS API. Go to /docs for API documentation."
+    }
