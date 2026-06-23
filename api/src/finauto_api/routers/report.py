@@ -36,15 +36,35 @@ class JobResponse(BaseModel):
 @router.post("", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def generate_report(
     ticker: str = Form(..., description="Target company ticker, e.g. BIMAS.IS"),
-    file: UploadFile = File(..., description="Edited valuation Excel workbook"),
+    file: Optional[UploadFile] = File(None, description="Edited valuation Excel workbook"),
+    workbook_job_id: Optional[str] = Form(None, description="Completed workbook build job ID to use as fallback"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     storage: Storage = Depends(get_storage_dep),
     queue: JobQueue = Depends(get_queue_dep),
 ):
-    unique_id = uuid.uuid4().hex
-    file_key = f"uploads/{current_user.id}/xlsx/{unique_id}_{file.filename}"
-    storage.save_file(file_key, file.file)
+    if file:
+        unique_id = uuid.uuid4().hex
+        file_key = f"uploads/{current_user.id}/xlsx/{unique_id}_{file.filename}"
+        storage.save_file(file_key, file.file)
+    elif workbook_job_id:
+        build_job = db.query(Job).filter(
+            Job.id == workbook_job_id,
+            Job.user_id == current_user.id,
+            Job.type == "build",
+            Job.status == "completed"
+        ).first()
+        if not build_job or not build_job.output_file_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or incomplete workbook job ID."
+            )
+        file_key = build_job.output_file_key
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either an uploaded file or a workbook_job_id must be provided."
+        )
 
     # Log this as a "report" Job in DB
     job = Job(

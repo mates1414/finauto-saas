@@ -3,10 +3,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .deps import engine
 from .models import Base
-from .routers import auth, extract, financials, peers, workbook, report
+from .routers import auth, extract, financials, peers, workbook, report, research
+from sqlalchemy import text
 
 # Create database tables automatically
 Base.metadata.create_all(bind=engine)
+
+# Apply SQLite migration for is_private column on jobs table if needed
+with engine.connect() as conn:
+    try:
+        conn.execute(text("SELECT is_private FROM jobs LIMIT 1"))
+    except Exception:
+        try:
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN is_private BOOLEAN DEFAULT 0"))
+            conn.commit()
+        except Exception:
+            pass
 
 app = FastAPI(
     title=settings.app_name,
@@ -34,6 +46,7 @@ app.include_router(financials.router)
 app.include_router(peers.router)
 app.include_router(workbook.router)
 app.include_router(report.router)
+app.include_router(research.router)
 
 
 @app.get("/")

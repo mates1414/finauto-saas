@@ -27,6 +27,7 @@ class JobResponse(BaseModel):
 async def extract_financials(
     ticker: str = Form(..., description="Target company ticker, e.g. BIMAS.IS"),
     files: List[UploadFile] = File(..., description="PDF files containing financial reports"),
+    is_private: bool = Form(False, description="Keep this data private (do not add financials to global cache)"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     storage: Storage = Depends(get_storage_dep),
@@ -50,6 +51,7 @@ async def extract_financials(
         status="pending",
         input_file_keys=",".join(file_keys),
         ticker=ticker,
+        is_private=is_private,
     )
     db.add(job)
     db.commit()

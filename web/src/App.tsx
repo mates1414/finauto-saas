@@ -1,6 +1,6 @@
 import { useState, Fragment } from "react";
 import { LogOut, ArrowRight, UserPlus, LogIn, Award } from "lucide-react";
-import { Step1Upload, Step2Peers, Step3Download, Step4UploadXlsx, Step5Report } from "./components/WizardSteps";
+import { Step1Upload, Step2Peers, Step3Research, Step3Download, Step4UploadXlsx, Step5Report } from "./components/WizardSteps";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
@@ -85,7 +85,7 @@ function App() {
     setJobId("");
   };
 
-  const nextStep = () => setStep(prev => Math.min(prev + 1, 5));
+  const nextStep = () => setStep(prev => Math.min(prev + 1, 6));
   const prevStep = () => setStep(prev => Math.max(prev - 1, 1));
 
   // If not authenticated, render login panel
@@ -178,9 +178,10 @@ function App() {
   const stepsList = [
     "1. Ingestion",
     "2. Competitors",
-    "3. Spreadsheet",
-    "4. Read-back",
-    "5. Equity Report"
+    "3. Deep Research",
+    "4. Spreadsheet",
+    "5. Read-back",
+    "6. Equity Report"
   ];
 
   return (
@@ -205,7 +206,7 @@ function App() {
       </header>
 
       {/* Shared ticker + free step navigation */}
-      <div className="max-w-7xl w-full mx-auto px-4 mt-8">
+      <div className="max-w-7xl w-full mx-auto px-4 mt-8 no-print">
         <div className="glass-panel p-4 mb-4 flex flex-wrap items-center gap-3">
           <label className="text-xs font-semibold uppercase tracking-wider text-cyan-400">Ticker</label>
           <input
@@ -281,7 +282,7 @@ function App() {
           />
         )}
         {step === 3 && (
-          <Step3Download
+          <Step3Research
             token={token}
             ticker={ticker}
             setTicker={setTicker}
@@ -292,7 +293,7 @@ function App() {
           />
         )}
         {step === 4 && (
-          <Step4UploadXlsx
+          <Step3Download
             token={token}
             ticker={ticker}
             setTicker={setTicker}
@@ -303,6 +304,17 @@ function App() {
           />
         )}
         {step === 5 && (
+          <Step4UploadXlsx
+            token={token}
+            ticker={ticker}
+            setTicker={setTicker}
+            nextStep={nextStep}
+            prevStep={prevStep}
+            jobId={jobId}
+            setJobId={setJobId}
+          />
+        )}
+        {step === 6 && (
           <Step5Report
             token={token}
             ticker={ticker}

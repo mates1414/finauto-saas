@@ -110,3 +110,100 @@ def test_report_task_and_streaming(mock_writer_complete, mock_read_inputs, mock_
     assert any("Equity research report text." in line for line in lines)
     assert any("[DONE]" in line for line in lines)
 
+
+def test_report_with_workbook_job_id_fallback(db, client, auth_headers):
+    from finauto_api.models import User
+    user = db.query(User).filter(User.email == "test@example.com").first()
+    
+    # Create a mock build job that is completed
+    build_job = Job(
+        id="test_build_job_id",
+        user_id=user.id,
+        type="build",
+        status="completed",
+        output_file_key="workbooks/test/model.xlsx",
+        ticker="THYAO.IS"
+    )
+    db.add(build_job)
+    db.commit()
+
+    # Trigger report generation with workbook_job_id
+    response = client.post(
+        "/api/report",
+        headers=auth_headers,
+        data={
+            "ticker": "THYAO.IS",
+            "workbook_job_id": build_job.id
+        }
+    )
+    
+    assert response.status_code == 202
+    data = response.json()
+    assert data["type"] == "report"
+    assert data["status"] == "pending"
+    
+    # Verify the created job has input_file_key set to build_job.output_file_key
+    report_job = db.query(Job).filter(Job.id == data["id"]).first()
+    assert report_job.input_file_keys == "workbooks/test/model.xlsx"
+
+
+@patch("finauto_api.jobs.tasks.run_research_task")
+def test_research_endpoints(mock_run_research, client, auth_headers):
+    # Trigger research build
+    response = client.post(
+        "/api/research/build",
+        headers=auth_headers,
+        data={"ticker": "THYAO.IS"}
+    )
+    assert response.status_code == 202
+    data = response.json()
+    assert data["type"] == "research"
+    assert data["status"] == "pending"
+    job_id = data["id"]
+
+    # Get research job status
+    response = client.get(
+        f"/api/research/{job_id}",
+        headers=auth_headers
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending"
+
+
+@pytest.mark.asyncio
+@patch("yfinance.Ticker")
+@patch("finauto_api.jobs.tasks.StreamingReportWriter.complete")
+async def test_research_task_execution(mock_writer_complete, mock_ticker, db):
+    # Mock yfinance Ticker info
+    mock_ticker_instance = MagicMock()
+    mock_ticker_instance.info = {
+        "longName": "Mock Company",
+        "longBusinessSummary": "Summary details",
+        "sector": "Technology",
+        "industry": "Software"
+    }
+    mock_ticker.return_value = mock_ticker_instance
+
+    mock_writer_complete.return_value = "Mock Research Report Output"
+
+    from finauto_api.models import User
+    user = User(email="research_task@example.com", hashed_password="hashedpassword")
+    db.add(user)
+    db.commit()
+
+    job = Job(
+        user_id=user.id,
+        type="research",
+        status="pending",
+        ticker="THYAO.IS",
+    )
+    db.add(job)
+    db.commit()
+
+    from finauto_api.jobs.tasks import run_research_task
+    await run_research_task(job.id)
+
+    db.refresh(job)
+    assert job.status == "completed"
+    assert "Mock Research Report Output" in job.result_json
+

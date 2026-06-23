@@ -60,6 +60,8 @@ class Job(Base):
         nullable=False,
     )
 
+    is_private = Column(Boolean, default=False, nullable=True)
+
     user = relationship("User", back_populates="jobs")
 
 

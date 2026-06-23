@@ -15,6 +15,11 @@ class JobQueue(ABC):
         """Enqueue a strategic report generation job."""
         pass
 
+    @abstractmethod
+    async def enqueue_research(self, job_id: str) -> None:
+        """Enqueue a deep research job."""
+        pass
+
 
 class ArqQueue(JobQueue):
     def __init__(self, redis_url: str):
@@ -34,6 +39,10 @@ class ArqQueue(JobQueue):
         pool = await self.get_pool()
         await pool.enqueue_job("report_task", job_id)
 
+    async def enqueue_research(self, job_id: str) -> None:
+        pool = await self.get_pool()
+        await pool.enqueue_job("research_task", job_id)
+
 
 class InMemoryQueue(JobQueue):
     async def enqueue_extraction(self, job_id: str) -> None:
@@ -46,6 +55,11 @@ class InMemoryQueue(JobQueue):
         from .tasks import run_report_task
         import asyncio
         asyncio.create_task(run_report_task(job_id))
+
+    async def enqueue_research(self, job_id: str) -> None:
+        from .tasks import run_research_task
+        import asyncio
+        asyncio.create_task(run_research_task(job_id))
 
 
 _queue_instance: Optional[JobQueue] = None

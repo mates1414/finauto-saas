@@ -23,6 +23,7 @@ export const Step1Upload: React.FC<StepProps> = ({ token, ticker, setTicker, nex
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [statusText, setStatusText] = useState("");
+  const [isPrivate, setIsPrivate] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const advancedRef = useRef(false);
@@ -140,6 +141,7 @@ export const Step1Upload: React.FC<StepProps> = ({ token, ticker, setTicker, nex
     try {
       const formData = new FormData();
       formData.append("ticker", ticker.toUpperCase());
+      formData.append("is_private", isPrivate.toString());
       files.forEach((file) => {
         formData.append("files", file);
       });
@@ -329,6 +331,21 @@ export const Step1Upload: React.FC<StepProps> = ({ token, ticker, setTicker, nex
         </div>
       )}
 
+      {!loading && (
+        <div className="mb-6 flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="isPrivate"
+            checked={isPrivate}
+            onChange={(e) => setIsPrivate(e.target.checked)}
+            className="w-4 h-4 rounded border-white/10 bg-white/5 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0 focus:ring-0"
+          />
+          <label htmlFor="isPrivate" className="text-xs text-gray-400 font-semibold cursor-pointer">
+            Keep this data private (do not add financials to global cache)
+          </label>
+        </div>
+      )}
+
       {loading ? (
         <div className="flex items-center gap-4 bg-cyan-950/20 border border-cyan-900/40 p-4 rounded-lg">
           <div className="spinner" />
@@ -502,7 +519,117 @@ export const Step2Peers: React.FC<StepProps> = ({ token, ticker, nextStep, prevS
 };
 
 /* ==========================================
-   STEP 3: BUILD & DOWNLOAD EXCEL MODEL
+   STEP 3: DEEP RESEARCH
+   ========================================== */
+export const Step3Research: React.FC<StepProps> = ({ token, ticker, nextStep, prevStep }) => {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [researchText, setResearchText] = useState("");
+  const [jobId, setLocalJobId] = useState("");
+
+  const triggerResearch = async () => {
+    setLoading(true);
+    setError("");
+    setResearchText("");
+    try {
+      const formData = new FormData();
+      formData.append("ticker", ticker.toUpperCase());
+
+      const response = await fetch(`${API_BASE}/api/research/build`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.detail || "Deep research failed.");
+      }
+
+      const job = await response.json();
+      setLocalJobId(job.id);
+      
+      // Establish EventSource for token streaming
+      const eventSource = new EventSource(`${API_BASE}/api/research/${job.id}/stream`);
+      
+      eventSource.onmessage = (event) => {
+        if (event.data === "[DONE]") {
+          eventSource.close();
+          setLoading(false);
+          return;
+        }
+        
+        try {
+          const token = JSON.parse(event.data);
+          setResearchText((prev) => prev + token);
+        } catch {
+          setResearchText((prev) => prev + event.data);
+        }
+      };
+
+      eventSource.onerror = () => {
+        eventSource.close();
+        setError("Error streaming research tokens.");
+        setLoading(false);
+      };
+
+    } catch (err: any) {
+      setError(err.message || "An error occurred during deep research.");
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (ticker) {
+      triggerResearch();
+    }
+  }, [ticker]);
+
+  return (
+    <div className="glass-panel p-8 relative overflow-hidden">
+      <div className="glowing-bg" style={{ top: "-150px", left: "-150px" }} />
+      <h2 className="text-2xl font-bold mb-2 text-gradient">Step 3: Company & Sector Deep Research</h2>
+      <p className="text-gray-400 mb-6 text-sm">
+        Review competitive dynamics, financial efficiency (DuPont Analysis), and advisable valuation model ranges before spreadsheet generation.
+      </p>
+
+      {error && (
+        <div className="bg-red-950/40 border border-red-900/60 p-4 rounded-lg mb-6 flex items-start gap-3 text-red-400 text-sm">
+          <AlertTriangle className="shrink-0 mt-0.5" size={18} />
+          <div>{error}</div>
+        </div>
+      )}
+
+      {loading && !researchText && (
+        <div className="flex flex-col items-center justify-center p-12 bg-white/2 border border-white/5 rounded-xl mb-6">
+          <div className="spinner mb-4" />
+          <div className="text-sm text-cyan-400 font-medium">Gathering industry structure and competitor parameters...</div>
+          <div className="text-xs text-gray-500 mt-1">This will stream Porter's Five Forces and input bounds.</div>
+        </div>
+      )}
+
+      {researchText && (
+        <div className="mb-6 p-6 rounded-xl bg-white/3 border border-white/5 max-h-[500px] overflow-y-auto font-sans text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">
+          {researchText}
+        </div>
+      )}
+
+      <div className="flex gap-4">
+        <button onClick={prevStep} disabled={loading} className="btn-secondary">Back</button>
+        <button onClick={nextStep} disabled={loading} className="btn-primary flex items-center gap-2">
+          Proceed to Spreadsheet
+          <ArrowRight size={16} />
+        </button>
+      </div>
+    </div>
+  );
+};
+
+
+/* ==========================================
+   STEP 4: BUILD & DOWNLOAD EXCEL MODEL (Formerly Step 3)
    ========================================== */
 export const Step3Download: React.FC<StepProps> = ({ token, ticker, nextStep, prevStep, setJobId }) => {
   const [loading, setLoading] = useState(false);
@@ -642,14 +769,55 @@ export const Step3Download: React.FC<StepProps> = ({ token, ticker, nextStep, pr
 };
 
 /* ==========================================
-   STEP 4: UPLOAD EDITED EXCEL
+   STEP 5: UPLOAD EDITED EXCEL (Formerly Step 4)
    ========================================== */
-export const Step4UploadXlsx: React.FC<StepProps> = ({ token, ticker, nextStep, prevStep, setJobId }) => {
+export const Step4UploadXlsx: React.FC<StepProps> = ({ token, ticker, nextStep, prevStep, jobId, setJobId }) => {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [statusText, setStatusText] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const useServerCompiled = async () => {
+    if (!ticker) {
+      setError("Set the target ticker at the top of the page first (e.g. BIMAS.IS).");
+      return;
+    }
+    if (!jobId) {
+      setError("No compiled workbook job ID found. Please compile the spreadsheet first.");
+      return;
+    }
+
+    setError("");
+    setLoading(true);
+    setStatusText("Initiating report from server workbook...");
+
+    try {
+      const formData = new FormData();
+      formData.append("ticker", ticker.toUpperCase());
+      formData.append("workbook_job_id", jobId);
+
+      const response = await fetch(`${API_BASE}/api/report`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.detail || "Strategic report initialization failed.");
+      }
+
+      const job = await response.json();
+      setJobId(job.id);
+      nextStep();
+    } catch (err: any) {
+      setError(err.message || "An error occurred during report initialization.");
+      setLoading(false);
+    }
+  };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -763,15 +931,32 @@ export const Step4UploadXlsx: React.FC<StepProps> = ({ token, ticker, nextStep, 
           <div className="text-sm font-medium text-cyan-300">{statusText}</div>
         </div>
       ) : (
-        <div className="flex gap-4">
-          <button onClick={prevStep} className="btn-secondary">Back</button>
-          <button
-            onClick={triggerUpload}
-            disabled={!file}
-            className="btn-primary"
-          >
-            Upload & Recalculate
-          </button>
+        <div className="flex flex-col gap-6 w-full">
+          {jobId && (
+            <div className="p-5 rounded-xl bg-cyan-950/15 border border-cyan-800/40 text-left">
+              <h4 className="text-sm font-semibold text-cyan-300 mb-2">Use Server-Compiled Fallback</h4>
+              <p className="text-xs text-gray-400 mb-4">
+                Alternatively, use the server-compiled workbook directly if you don't need to make manual edits.
+              </p>
+              <button
+                onClick={useServerCompiled}
+                className="btn-primary flex items-center gap-2"
+              >
+                Use Server-Compiled Workbook
+              </button>
+            </div>
+          )}
+
+          <div className="flex gap-4">
+            <button onClick={prevStep} className="btn-secondary">Back</button>
+            <button
+              onClick={triggerUpload}
+              disabled={!file}
+              className="btn-primary"
+            >
+              Upload & Recalculate
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -943,12 +1128,23 @@ export const Step5Report: React.FC<StepProps> = ({ token, jobId }) => {
             <h2 className="text-xl font-bold text-gradient">Grounded Valuation Analysis</h2>
             <p className="text-xs text-gray-500">Live AI Narrative Stream · Citations Grounded</p>
           </div>
-          {loading && (
-            <div className="flex items-center gap-2 text-cyan-400 font-semibold text-xs animate-pulse">
-              <div className="spinner" style={{ width: "14px", height: "14px", borderWidth: "2px" }} />
-              STREAMING...
-            </div>
-          )}
+          <div className="flex items-center gap-3">
+            {!loading && (
+              <button
+                onClick={() => window.print()}
+                className="flex items-center gap-1.5 py-1.5 px-3 rounded-lg text-xs font-semibold text-cyan-400 bg-cyan-500/10 border border-cyan-500/30 hover:bg-cyan-500/20 transition-all no-print"
+              >
+                <Download size={14} />
+                Download PDF Report
+              </button>
+            )}
+            {loading && (
+              <div className="flex items-center gap-2 text-cyan-400 font-semibold text-xs animate-pulse">
+                <div className="spinner" style={{ width: "14px", height: "14px", borderWidth: "2px" }} />
+                STREAMING...
+              </div>
+            )}
+          </div>
         </div>
 
         {error && (
@@ -985,22 +1181,79 @@ export const Step5Report: React.FC<StepProps> = ({ token, jobId }) => {
         )}
 
         {/* Valuation ranges Football-field Chart */}
+        {/* Valuation ranges Football-field Chart */}
         {metrics && (
-          <div className="glass-panel p-6">
-            <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-4">Valuation Methodology Ranges</h3>
-            <FootballFieldChart
-              currentPrice={metrics.currentPrice}
-              dcfPrice={metrics.dcfPrice}
-              evEbitdaPrice={metrics.evEbitdaPrice}
-              pePrice={metrics.pePrice}
-              evSalesPrice={metrics.evSalesPrice}
-            />
+          <div className="flex flex-col gap-6">
+            <div className="glass-panel p-6">
+              <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-4">Valuation Methodology Ranges</h3>
+              <FootballFieldChart
+                currentPrice={metrics.currentPrice}
+                dcfPrice={metrics.dcfPrice}
+                evEbitdaPrice={metrics.evEbitdaPrice}
+                pePrice={metrics.pePrice}
+                evSalesPrice={metrics.evSalesPrice}
+              />
+            </div>
+
+            <div className="glass-panel p-6">
+              <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-4">Valuation Summary Table</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm border-collapse text-gray-300">
+                  <thead>
+                    <tr className="border-b border-white/10 text-gray-400">
+                      <th className="py-2">Methodology</th>
+                      <th className="py-2 text-right">Implied Price</th>
+                      <th className="py-2 text-right">Weight</th>
+                      <th className="py-2 text-right">Contribution</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-b border-white/5">
+                      <td className="py-2 text-gray-300">Discounted Cash Flow (DCF)</td>
+                      <td className="py-2 text-right font-mono text-cyan-300">{metrics.dcfPrice.toFixed(2)}</td>
+                      <td className="py-2 text-right font-mono text-gray-400">40%</td>
+                      <td className="py-2 text-right font-mono text-gray-300">{(metrics.dcfPrice * 0.40).toFixed(2)}</td>
+                    </tr>
+                    <tr className="border-b border-white/5">
+                      <td className="py-2 text-gray-300">EV/EBITDA Multiples</td>
+                      <td className="py-2 text-right font-mono text-cyan-300">{metrics.evEbitdaPrice.toFixed(2)}</td>
+                      <td className="py-2 text-right font-mono text-gray-400">30%</td>
+                      <td className="py-2 text-right font-mono text-gray-300">{(metrics.evEbitdaPrice * 0.30).toFixed(2)}</td>
+                    </tr>
+                    <tr className="border-b border-white/5">
+                      <td className="py-2 text-gray-300">P/E Multiples</td>
+                      <td className="py-2 text-right font-mono text-cyan-300">{metrics.pePrice.toFixed(2)}</td>
+                      <td className="py-2 text-right font-mono text-gray-400">20%</td>
+                      <td className="py-2 text-right font-mono text-gray-300">{(metrics.pePrice * 0.20).toFixed(2)}</td>
+                    </tr>
+                    <tr className="border-b border-white/5">
+                      <td className="py-2 text-gray-300">EV/Sales Multiples</td>
+                      <td className="py-2 text-right font-mono text-cyan-300">{metrics.evSalesPrice.toFixed(2)}</td>
+                      <td className="py-2 text-right font-mono text-gray-400">10%</td>
+                      <td className="py-2 text-right font-mono text-gray-300">{(metrics.evSalesPrice * 0.10).toFixed(2)}</td>
+                    </tr>
+                    <tr className="border-b border-white/10 font-bold">
+                      <td className="py-2 text-gradient">Weighted Target Price</td>
+                      <td className="py-2 text-right font-mono text-gradient" colSpan={2}>{metrics.targetPrice.toFixed(2)}</td>
+                      <td className="py-2 text-right font-mono text-gradient">{metrics.targetPrice.toFixed(2)}</td>
+                    </tr>
+                    <tr className="font-semibold text-xs text-gray-400">
+                      <td className="py-2">Current Market Price</td>
+                      <td className="py-2 text-right font-mono" colSpan={2}>{metrics.currentPrice.toFixed(2)}</td>
+                      <td className={`py-2 text-right font-mono ${metrics.targetPrice > metrics.currentPrice ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {(((metrics.targetPrice / metrics.currentPrice) - 1) * 100).toFixed(1)}% Upside
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         )}
 
         {/* Grounding warnings */}
         {warnings.length > 0 && (
-          <div className="glass-panel p-6 border-red-500/20 bg-red-950/5">
+          <div className="glass-panel p-6 border-red-500/20 bg-red-950/5 no-print">
             <div className="flex items-center gap-2 text-amber-500 font-semibold text-sm uppercase tracking-wider mb-3">
               <AlertTriangle size={16} />
               Ungrounded Figures Warnings

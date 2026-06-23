@@ -44,8 +44,10 @@ def available_financials(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """List the fiscal years cached (globally) for a ticker, so the UI can offer reuse."""
+    """List the fiscal years cached (globally or privately in user's snapshot) for a ticker, so the UI can offer reuse."""
     ticker = ticker.upper()
+    
+    # 1. Fetch from global cache
     rows = (
         db.query(CachedFinancials)
         .filter(CachedFinancials.ticker == ticker)
@@ -53,21 +55,57 @@ def available_financials(
         .all()
     )
 
-    # Metadata comes from the most recently updated row (latest extraction wins).
+    # 2. Fetch from user's private snapshot
+    snapshot = (
+        db.query(Snapshot)
+        .filter(Snapshot.user_id == current_user.id, Snapshot.ticker == ticker)
+        .first()
+    )
+
+    snapshot_years = []
+    snapshot_name = None
+    snapshot_currency = None
+    snapshot_units = None
+    if snapshot and snapshot.financials_json:
+        try:
+            cf = CompanyFinancials.model_validate_json(snapshot.financials_json)
+            snapshot_name = cf.name
+            snapshot_currency = cf.currency
+            snapshot_units = cf.units
+            for period in cf.periods:
+                snapshot_years.append(
+                    CachedYear(
+                        year=period.year,
+                        source="private_snapshot",
+                        updated_at=snapshot.created_at.isoformat() if snapshot.created_at else None
+                    )
+                )
+        except Exception:
+            pass
+
+    # Merge and deduplicate by year
+    years_dict = {}
+    for r in rows:
+        years_dict[r.fiscal_year] = CachedYear(
+            year=r.fiscal_year,
+            source=r.source,
+            updated_at=r.updated_at.isoformat() if r.updated_at else None,
+        )
+    for sy in snapshot_years:
+        if sy.year not in years_dict:
+            years_dict[sy.year] = sy
+
+    sorted_years = [years_dict[y] for y in sorted(years_dict.keys())]
+
+    # Metadata comes from the most recently updated global row, or fallback to snapshot
     latest = max(rows, key=lambda r: r.updated_at, default=None)
+    
     return AvailableResponse(
         ticker=ticker,
-        name=latest.name if latest else None,
-        currency=latest.currency if latest else None,
-        units=latest.units if latest else None,
-        years=[
-            CachedYear(
-                year=r.fiscal_year,
-                source=r.source,
-                updated_at=r.updated_at.isoformat() if r.updated_at else None,
-            )
-            for r in rows
-        ],
+        name=(latest.name if latest else None) or snapshot_name,
+        currency=(latest.currency if latest else None) or snapshot_currency,
+        units=(latest.units if latest else None) or snapshot_units,
+        years=sorted_years,
     )
 
 
@@ -78,7 +116,7 @@ def select_financials(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Reuse cached financials: assemble the chosen years and store them in the user's Snapshot."""
+    """Reuse cached financials (global or user's private snapshot): assemble the chosen years and store them in the user's Snapshot."""
     ticker = ticker.upper()
     if not req.years:
         raise HTTPException(
@@ -86,6 +124,7 @@ def select_financials(
             detail="Select at least one fiscal year.",
         )
 
+    # 1. Fetch from global cache
     rows = (
         db.query(CachedFinancials)
         .filter(
@@ -94,15 +133,67 @@ def select_financials(
         )
         .all()
     )
-    if not rows:
+
+    # 2. Fetch missing years from user's private snapshot
+    found_years = {r.fiscal_year for r in rows}
+    missing_years = set(req.years) - found_years
+
+    snapshot_periods = []
+    snapshot_source = "private_snapshot"
+    snapshot_name = None
+    snapshot_currency = None
+    snapshot_units = None
+
+    if missing_years:
+        snapshot = (
+            db.query(Snapshot)
+            .filter(Snapshot.user_id == current_user.id, Snapshot.ticker == ticker)
+            .first()
+        )
+        if snapshot and snapshot.financials_json:
+            try:
+                cf = CompanyFinancials.model_validate_json(snapshot.financials_json)
+                snapshot_name = cf.name
+                snapshot_currency = cf.currency
+                snapshot_units = cf.units
+                snapshot_source = cf.source or "private_snapshot"
+                for period in cf.periods:
+                    if period.year in missing_years:
+                        snapshot_periods.append(period)
+            except Exception:
+                pass
+
+    # Assemble all period data
+    all_year_data = []
+    for r in rows:
+        all_year_data.append({
+            "year": r.fiscal_year,
+            "currency": r.currency or "TRY",
+            "units": r.units or "units",
+            "source": r.source,
+            "name": r.name,
+            "sector_hint": r.sector_hint,
+            "period": FiscalYearData.model_validate_json(r.period_json)
+        })
+    for p in snapshot_periods:
+        all_year_data.append({
+            "year": p.year,
+            "currency": snapshot_currency or "TRY",
+            "units": snapshot_units or "units",
+            "source": snapshot_source,
+            "name": snapshot_name,
+            "sector_hint": None,
+            "period": p
+        })
+
+    if len(all_year_data) != len(req.years):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="No cached financials found for the requested ticker/years.",
+            detail="Some requested years could not be found in global cache or private snapshot.",
         )
 
     # Currencies must agree — mixing currencies in one model would be silently wrong
-    # (invariant #5). Units may differ across filings; normalize those instead.
-    currencies = {(r.currency or "TRY") for r in rows}
+    currencies = {y["currency"] for y in all_year_data}
     if len(currencies) > 1:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -110,35 +201,33 @@ def select_financials(
         )
     currency = currencies.pop()
 
-    distinct_units = {(r.units or "units") for r in rows}
+    distinct_units = {y["units"] for y in all_year_data}
     if len(distinct_units) == 1:
-        # All years share a scale — keep periods as extracted.
         units = distinct_units.pop()
-        periods = [FiscalYearData.model_validate_json(r.period_json) for r in rows]
+        periods = [y["period"] for y in all_year_data]
     else:
-        # Mixed scales (e.g. thousands + millions) — normalize each to absolute units
-        # before combining (invariant #10), reusing CompanyFinancials.normalized().
         units = "units"
         periods = [
             CompanyFinancials(
                 ticker=ticker,
                 currency=currency,
-                units=(r.units or "units"),
-                periods=[FiscalYearData.model_validate_json(r.period_json)],
+                units=y["units"],
+                periods=[y["period"]],
             )
             .normalized()
             .periods[0]
-            for r in rows
+            for y in all_year_data
         ]
 
-    latest = max(rows, key=lambda r: r.updated_at)
+    latest = max(all_year_data, key=lambda y: y["year"])
+    
     assembled = CompanyFinancials(
         ticker=ticker,
-        name=latest.name,
+        name=latest["name"] or snapshot_name,
         currency=currency,
         units=units,
-        sector_hint=latest.sector_hint,
-        source=latest.source,
+        sector_hint=latest["sector_hint"],
+        source=latest["source"],
         periods=periods,
     ).with_deduped_periods()
 
